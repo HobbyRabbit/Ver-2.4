@@ -4,69 +4,67 @@ import asyncio
 import logging
 from datetime import timedelta
 
+from homeassistant.helpers.update_coordinator import (
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-UPDATE_INTERVAL = timedelta(seconds=30)
+SCAN_INTERVAL = timedelta(seconds=30)
 
 
-class ACInfinityCoordinator(DataUpdateCoordinator):
+class ACInfinityCoordinator(DataUpdateCoordinator[dict]):
+    """AC Infinity BLE Coordinator"""
+
     def __init__(
         self,
         hass: HomeAssistant,
-        mac: str,
-        name: str | None = None,
+        client,
+        address: str,
+        ports: int = 8,
     ) -> None:
-        """Initialize AC Infinity coordinator."""
         self.hass = hass
-        self.mac = mac.upper()
-        self.name = name or f"AC Infinity {self.mac}"
-
-        # Placeholder state
-        self.data = {
-            "online": False,
-            "ports": {
-                1: False,
-                2: False,
-                3: False,
-                4: False,
-                5: False,
-                6: False,
-                7: False,
-                8: False,
-            },
-        }
+        self.client = client
+        self.address = address
+        self.ports = ports
 
         super().__init__(
             hass,
             _LOGGER,
-            name=self.name,
-            update_interval=UPDATE_INTERVAL,
+            name=f"AC Infinity {address}",
+            update_interval=SCAN_INTERVAL,
         )
 
-    async def _async_update_data(self):
-        """Fetch data from the device (stub for now)."""
-        _LOGGER.debug("Polling AC Infinity device %s", self.mac)
+    async def _async_update_data(self) -> dict:
+        """Fetch data from the AC Infinity device"""
 
-        # Until BLE read is implemented, just report online
-        self.data["online"] = True
+        try:
+            # --- CONNECT IF NEEDED ---
+            if not self.client.is_connected:
+                _LOGGER.debug("Connecting to AC Infinity %s", self.address)
+                await self.client.connect()
 
-        return self.data
+            # --- BUILD STATE DICT ---
+            data: dict = {
+                "online": True,
+                "ports": {},
+            }
 
-    async def async_set_port(self, port: int, state: bool) -> None:
-        """Set outlet/port ON or OFF."""
-        if port not in self.data["ports"]:
-            raise ValueError(f"Invalid port: {port}")
+            # --- PLACEHOLDER PORT STATE ---
+            # We do NOT yet know the real readback format.
+            # This keeps HA stable while we reverse packets.
+            for port in range(1, self.ports + 1):
+                data["ports"][port] = {
+                    "state": None,   # unknown yet
+                    "speed": None,   # fans use this, outlets ignore
+                }
 
-        _LOGGER.debug(
-            "Setting AC Infinity %s port %s -> %s",
-            self.mac,
-            port,
-            state,
-        )
+            return data
 
-        # TODO: Insert HunterJM BLE write here
-        self.data["ports"][port] = state
-        self.async_set_updated_data(self.data)
+        except Exception as err:
+            _LOGGER.exception(
+                "Unexpected error fetching AC Infinity %s data", self.address
+            )
+            raise UpdateFailed(err) from err
